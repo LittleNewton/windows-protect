@@ -1,23 +1,40 @@
 ﻿function Log-Event {
     param(
+        [Parameter(Mandatory=$true)]
         [string]$Message,
+        [switch]$LogBegin,
         [string]$LogFilePath = "C:\Users\Administrator\bin\PowerShell Scripts\Security\log\Block RDP IP.log"
     )
 
+    # Ensure the log directory exists
+    $logDir = Split-Path -Path $LogFilePath -Parent
+    if (-not (Test-Path -Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir | Out-Null
+    }
+
+    # Get timestamp
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+    # Prepare log entry
     $logEntry = "$timestamp - $Message"
-    Add-Content -Path $LogFilePath -Value $logEntry
+
+    # Log a separator for new events if $LogBegin is specified
+    if ($LogBegin) {
+        Add-Content -Path $LogFilePath -Value "`n`n$logEntry"
+    } else {
+        Add-Content -Path $LogFilePath -Value $logEntry
+    }
 }
 
-# Log the start of the script
-Log-Event "Script started."
+# Log the start of the script with LogBegin
+Log-Event -Message "Script started." -LogBegin
 
 
-#-- Block attackers.
 $EventID    = 4625  # Event ID for failed logon attempts
 $LogType    = "Security"
-$UniqueIPs  = New-Object System.Collections.Generic.HashSet[string]
-$FirewallRuleName = "A-恶意IP黑名单"
+$EventIPs   = New-Object System.Collections.Generic.HashSet[string]
+$NewIPs     = New-Object System.Collections.Generic.HashSet[string]
+$FirewallRuleName = "Block Malicious RDP Brute Force"
 
 # Query the event logs for the specific Event ID
 $FailedLogonEvents = Get-WinEvent -LogName $LogType | Where-Object { $_.Id -eq $EventID }
@@ -28,50 +45,43 @@ foreach ($Event in $FailedLogonEvents) {
         $IPAddress = $matches[1]
         # Exclude the loopback address and add others to the HashSet
         if ($IPAddress -ne "127.0.0.1") {
-            $UniqueIPs.Add($IPAddress) > $null
-            # Log each unique IP
-            Log-Event "Found unique IP: $IPAddress"
+            $EventIPs.Add($IPAddress) > $null
         }
     }
 }
 
-if ($UniqueIPs.Count -eq 0) {
-    Log-Event "No unique failed logon IPs found."
-    exit
-} else {
-    # log new added ip address
-    foreach ($IPAddress in $UniqueIPs) {
-        # in $IPAddress no in the existingAddresses
-        if ($ExistingAddresses -notcontains $IPAddress) {
-            Log-Event "Added new IP: $IPAddress"
+
+# Retrieve the existing firewall rule
+$FirewallRule = Get-NetFirewallRule -DisplayName $FirewallRuleName
+
+# Check if the firewall rule exists
+if ($FirewallRule) {
+    # Get the existing remote addresses from the firewall rule
+    $BlockedIPs = (Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $FirewallRule).RemoteAddress
+
+
+    foreach ($IPAddress in $EventIPs) {
+        # in $EventIPs but not in $BlockedIPs
+        if ($BlockedIPs -notcontains $IPAddress) {
+            $NewIPs.Add($IPAddress) > $null
+            Log-Event "Found new malicious IP: $IPAddress"
         }
     }
 
-    # Retrieve the existing firewall rule
-    $FirewallRule = Get-NetFirewallRule -DisplayName $FirewallRuleName
 
-    # Check if the firewall rule exists
-    if ($FirewallRule) {
-        # Get the existing remote addresses from the firewall rule
-        $ExistingAddresses = (Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $FirewallRule).RemoteAddress
+    # Combine existing addresses with the new unique IPs
+    $AllIPs = $BlockedIPs + $EventIPs | Select-Object -Unique
 
-        # Combine existing addresses with the new unique IPs
-        $AllIPs = $ExistingAddresses + $UniqueIPs | Select-Object -Unique
-
-        # Update the firewall rule with the new set of IP addresses
+    # Update the firewall rule with the new set of IP addresses
+    if ($NewIPs.Count -gt 0) {
+        Log-Event "Updating firewall rule '$FirewallRuleName' with new IP addresses: $NewIPs"
         Set-NetFirewallRule -Name $FirewallRule.Name -RemoteAddress $AllIPs
-        Write-Output "Firewall rule '$FirewallRuleName' updated with new IP addresses."
-        Log-Event "Firewall rule '$FirewallRuleName' updated with new IP addresses: $AllIPs"
     } else {
-        Write-Error "Firewall rule '$FirewallRuleName' not found."
-        Log-Event "Error: Firewall rule '$FirewallRuleName' not found."
+        Log-Event "No new IP addresses to add to firewall rule '$FirewallRuleName'"
     }
+} else {
+    Log-Event "Error: Firewall rule '$FirewallRuleName' not found."
 }
-
-# Display unique IP addresses and log
-$uniqueIPsString = $UniqueIPs -join ', '
-Write-Output "Unique failed logon IPs (excluding 127.0.0.1): $uniqueIPsString"
-Log-Event "Unique failed logon IPs (excluding 127.0.0.1): $uniqueIPsString"
 
 # Log the end of the script
 Log-Event "Script execution completed."
