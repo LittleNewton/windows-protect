@@ -3,7 +3,7 @@
         [Parameter(Mandatory=$true)]
         [string]$Message,
         [switch]$LogBegin,
-        [string]$LogFilePath = "C:\Users\Administrator\bin\PowerShell Scripts\Security\log\Block RDP IP.log"
+        [string]$LogFilePath = ".\log\Block RDP IP.log"
     )
 
     # Ensure the log directory exists
@@ -70,11 +70,12 @@ if ($FirewallRule) {
 
 
     # Combine existing addresses with the new unique IPs
-    $AllIPs = $BlockedIPs + $EventIPs | Select-Object -Unique
+    $AllIPs = ($BlockedIPs + " " + $EventIPs | Select-Object -Unique) -split " "
 
     # Update the firewall rule with the new set of IP addresses
     if ($NewIPs.Count -gt 0) {
-        Log-Event "Updating firewall rule '$FirewallRuleName' with new IP addresses: $NewIPs"
+        Log-Event "Updating firewall rule '$FirewallRuleName' with new IP addresses: '$NewIPs'."
+        Log-Event "Current malicious IP addresses: '$AllIPs'."
         Set-NetFirewallRule -Name $FirewallRule.Name -RemoteAddress $AllIPs
     } else {
         Log-Event "No new IP addresses to add to firewall rule '$FirewallRuleName'"
