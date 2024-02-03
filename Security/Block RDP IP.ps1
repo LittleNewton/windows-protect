@@ -26,15 +26,17 @@
     }
 }
 
+
 # Log the start of the script with LogBegin
 Log-Event -Message "Script started." -LogBegin
 
 
-$EventID    = 4625  # Event ID for failed logon attempts
-$LogType    = "Security"
-$EventIPs   = New-Object System.Collections.Generic.HashSet[string]
-$NewIPs     = New-Object System.Collections.Generic.HashSet[string]
-$FirewallRuleName = "Block Malicious RDP Brute Force"
+$EventID                    = 4625  # Event ID for failed logon attempts
+$LogType                    = "Security"
+$EventIPs                   = New-Object System.Collections.Hashtable
+$NewIPs                     = New-Object System.Collections.Generic.HashSet[string]
+$FirewallRuleName           = "Block Malicious RDP Brute Force"
+$TolerableFailedAttempts    = 6
 
 # Query the event logs for the specific Event ID
 $FailedLogonEvents = Get-WinEvent -LogName $LogType | Where-Object { $_.Id -eq $EventID }
@@ -43,16 +45,21 @@ $FailedLogonEvents = Get-WinEvent -LogName $LogType | Where-Object { $_.Id -eq $
 foreach ($Event in $FailedLogonEvents) {
     if ($Event.Message -match "源网络地址:	\s*(\d{1,3}(\.\d{1,3}){3})") {
         $IPAddress = $matches[1]
+
         # Exclude the loopback address and add others to the HashSet
         if ($IPAddress -ne "127.0.0.1") {
-            $EventIPs.Add($IPAddress) > $null
+            if ($EventIPs[$IPAddress] -eq $null) {
+                $EventIPs[$IPAddress] = 1
+            } else {
+                $EventIPs[$IPAddress]++
+            }
         }
     }
 }
 
 
 # Retrieve the existing firewall rule
-$FirewallRule = Get-NetFirewallRule -DisplayName $FirewallRuleName
+$FirewallRule = Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue
 
 # Check if the firewall rule exists
 if ($FirewallRule) {
@@ -60,21 +67,22 @@ if ($FirewallRule) {
     $BlockedIPs = (Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $FirewallRule).RemoteAddress
 
 
-    foreach ($IPAddress in $EventIPs) {
+    foreach ($IPAddress in $EventIPs.Keys) {
         # in $EventIPs but not in $BlockedIPs
-        if ($BlockedIPs -notcontains $IPAddress) {
+        if ($BlockedIPs -notcontains $IPAddress -and $EventIPs[$IPAddress] -gt $TolerableFailedAttempts) {
             $NewIPs.Add($IPAddress) > $null
-            Log-Event "Found new malicious IP: $IPAddress"
+            Log-Event "Found new malicious IP: $IPAddress.`tAttack count: '$($EventIPs[$IPAddress])'."
         }
     }
 
 
     # Combine existing addresses with the new unique IPs
-    $AllIPs = ($BlockedIPs + " " + $EventIPs | Select-Object -Unique) -split " "
+    # $AllIPs = ($BlockedIPs + " " + $EventIPs.Keys | Select-Object -Unique) -split " "
+    $AllIPs = $BlockedIPs + $EventIPs.Keys | Select-Object -Unique
 
     # Update the firewall rule with the new set of IP addresses
     if ($NewIPs.Count -gt 0) {
-        Log-Event "Updating firewall rule '$FirewallRuleName' with new IP addresses: '$NewIPs'."
+        Log-Event "Updating firewall rule '$FirewallRuleName' with new IP addresses: '$NewIPs'"
         Log-Event "Current malicious IP addresses: '$AllIPs'."
         Set-NetFirewallRule -Name $FirewallRule.Name -RemoteAddress $AllIPs
     } else {
@@ -82,6 +90,7 @@ if ($FirewallRule) {
     }
 } else {
     Log-Event "Error: Firewall rule '$FirewallRuleName' not found."
+    New-NetFirewallRule -DisplayName $FirewallRule -Direction Inbound -Action Block -Protocol Any -RemoteAddress $maliciousIPs
 }
 
 # Log the end of the script
