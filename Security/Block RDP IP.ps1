@@ -31,15 +31,18 @@
 Log-Event -Message "Script started." -LogBegin
 
 
-$EventID                    = 4625  # Event ID for failed logon attempts
-$LogType                    = "Security"
+$LogType                    = @{
+    LogName = 'Security';
+    ID = 4625; # unsuccessful logon attempts
+}
+
 $EventIPs                   = New-Object System.Collections.Hashtable
 $NewIPs                     = New-Object System.Collections.Generic.HashSet[string]
 $FirewallRuleName           = "Block Malicious RDP Brute Force"
 $TolerableFailedAttempts    = 6
 
 # Query the event logs for the specific Event ID
-$FailedLogonEvents = Get-WinEvent -LogName $LogType | Where-Object { $_.Id -eq $EventID }
+$FailedLogonEvents = Get-WinEvent -FilterHashtable $LogType
 
 # Iterate through each event to extract IP addresses
 foreach ($Event in $FailedLogonEvents) {
