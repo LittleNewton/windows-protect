@@ -81,7 +81,7 @@ if ($FirewallRule) {
 
     # Combine existing addresses with the new unique IPs
     # $AllIPs = ($BlockedIPs + " " + $EventIPs.Keys | Select-Object -Unique) -split " "
-    $AllIPs = $BlockedIPs + $EventIPs.Keys | Select-Object -Unique
+    $AllIPs = $BlockedIPs + $NewIPs.Keys | Select-Object -Unique
 
     # Update the firewall rule with the new set of IP addresses
     if ($NewIPs.Count -gt 0) {
